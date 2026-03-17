@@ -1119,7 +1119,6 @@ function setScanMode(m){
 // ─── SCAN PHOTO ───────────────────────────────
 async function handleScan(e){
   var file=e.target.files[0];if(!file)return;
-  // reset other input so same file can be reselected
   document.getElementById('scanInput').value='';
   document.getElementById('scanInputCam').value='';
   var reader=new FileReader();
@@ -1130,9 +1129,9 @@ async function handleScan(e){
     var b64=ev.target.result.split(',')[1];var mt=file.type||'image/jpeg';
     var prompt='Voce e um especialista em leitura de listas de compras manuscritas. Analise cuidadosamente esta imagem que pode conter escrita a lapis, caneta, canetinha, letra cursiva, letra de forma, escrita rapida ou ate borrada. Sua missao e extrair TODOS os itens visiveis, mesmo que a escrita seja dificil de ler — faca o melhor esforco para interpretar cada palavra. Para cada item identifique: nome do produto (corrija erros ortograficos obvios), preco se visivel (numero decimal, 0 se nao houver), quantidade se visivel (inteiro, 1 se nao houver). Se uma palavra for ambigua, interprete como um produto alimenticio ou de limpeza mais proximo. Responda EXCLUSIVAMENTE com um array JSON puro, sem nenhum texto antes ou depois, sem markdown, sem explicacoes. Formato obrigatorio: [{"nome":"Arroz 5kg","preco":0,"qtd":1}]';
     try{
-      var resp=await fetch('https://api.anthropic.com/v1/messages',{
+      var resp=await fetch('/.netlify/functions/claude-proxy',{
         method:'POST',
-        headers:{'Content-Type':'application/json','anthropic-dangerous-direct-browser-access':'true'},
+        headers:{'Content-Type':'application/json'},
         body:JSON.stringify({
           model:'claude-sonnet-4-20250514',max_tokens:2000,
           messages:[{role:'user',content:[
@@ -1142,37 +1141,30 @@ async function handleScan(e){
         })
       });
       if(!resp.ok){
-        var err=await resp.json().catch(function(){return{};});
-        if(resp.status===0||resp.type==='opaque'||resp.status===403){
-          st.innerHTML='&#x26A0;&#xFE0F; Bloqueado pelo navegador (CORS). Use o modo <strong>Digitar lista</strong> ao abrir como arquivo local.';
-          document.getElementById('scanModeText').click();return;
-        }
-        throw new Error('HTTP '+resp.status);
+        var errData=await resp.json().catch(function(){return{};});
+        var msg=errData.error||('HTTP '+resp.status);
+        st.innerHTML='&#x26A0;&#xFE0F; Erro: '+esc(String(msg))+'. Verifique a chave da API nas configuracoes do Netlify ou use <strong>Digitar lista</strong>.';
+        return;
       }
       var data=await resp.json();
       if(data.error){
-        st.innerHTML='&#x26A0;&#xFE0F; '+esc(data.error.message||'Erro da API')+'. Use o modo <strong>Digitar lista</strong>.';
+        st.innerHTML='&#x26A0;&#xFE0F; '+esc(data.error.message||JSON.stringify(data.error))+'. Use <strong>Digitar lista</strong>.';
         return;
       }
       var text=(data.content||[]).map(function(c){return c.text||'';}).join('');
       var clean=text.replace(/```json|```/g,'').trim();
-      var parsed;try{parsed=JSON.parse(clean);}catch(pe){
-        // try to extract JSON array from text
+      var parsed;
+      try{parsed=JSON.parse(clean);}catch(pe){
         var m2=clean.match(/\[[\s\S]*\]/);
         if(m2)try{parsed=JSON.parse(m2[0]);}catch(e2){}
       }
       if(!parsed||!parsed.length){
-        st.innerHTML='&#x26A0;&#xFE0F; Nao foi possivel identificar itens. Tente foto mais iluminada ou use <strong>Digitar lista</strong>.';
+        st.innerHTML='&#x26A0;&#xFE0F; Nenhum item identificado. Tente foto mais iluminada ou use <strong>Digitar lista</strong>.';
         return;
       }
       renderScanItems(parsed,'scanItemsDiv',st,parsed.length+' itens identificados na foto:');
     }catch(err){
-      if(err.message&&err.message.indexOf('Failed to fetch')!==-1){
-        st.innerHTML='&#x26A0;&#xFE0F; Conexao bloqueada. Abra o app em servidor ou use o modo <strong>Digitar lista</strong> abaixo.';
-        setTimeout(function(){setScanMode('text');},1800);
-      }else{
-        st.innerHTML='&#x26A0;&#xFE0F; Erro: '+esc(err.message)+'. Tente novamente ou use <strong>Digitar lista</strong>.';
-      }
+      st.innerHTML='&#x26A0;&#xFE0F; Erro de conexao: '+esc(err.message)+'. Verifique se o deploy do Netlify esta atualizado.';
     }
   };
   reader.readAsDataURL(file);
@@ -1187,19 +1179,16 @@ async function processTextList(){
   st.innerHTML='&#x1F916; Organizando lista...';id2.innerHTML='';
   var prompt='Voce e um assistente de lista de compras. O usuario digitou a lista abaixo de forma livre. Identifique cada produto, extraindo nome, preco (se mencionado, senão 0) e quantidade (se mencionada, senão 1). Corrija erros de digitacao e nomes abreviados. Responda EXCLUSIVAMENTE com array JSON puro sem texto, sem markdown. Formato: [{"nome":"Arroz 5kg","preco":0,"qtd":1}]\n\nLista:\n'+raw;
   try{
-    var resp=await fetch('https://api.anthropic.com/v1/messages',{
+    var resp=await fetch('/.netlify/functions/claude-proxy',{
       method:'POST',
-      headers:{'Content-Type':'application/json','anthropic-dangerous-direct-browser-access':'true'},
+      headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         model:'claude-sonnet-4-20250514',max_tokens:2000,
         messages:[{role:'user',content:prompt}]
       })
     });
     var data=await resp.json();
-    if(data.error){
-      // fallback: parse locally without AI
-      localParseTextList(raw,st,id2);return;
-    }
+    if(!resp.ok||data.error){localParseTextList(raw,st,id2);return;}
     var text=(data.content||[]).map(function(c){return c.text||'';}).join('');
     var clean=text.replace(/```json|```/g,'').trim();
     var parsed;try{parsed=JSON.parse(clean);}catch(pe){var m2=clean.match(/\[[\s\S]*\]/);if(m2)try{parsed=JSON.parse(m2[0]);}catch(e2){}}
